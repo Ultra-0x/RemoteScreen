@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScreenShare — Share your screen</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; background: #0f172a; color: #e2e8f0; text-align: center; }
+  .card { background: #1e293b; border-radius: 12px; padding: 24px; margin-top: 16px; text-align: left; }
+  button { background: #2563eb; color: #fff; border: 0; padding: 12px 20px; border-radius: 8px; font-size: 16px; cursor: pointer; }
+  button:disabled { background: #334155; cursor: not-allowed; }
+  #live { color: #4ade80; font-weight: bold; display: none; }
+  video { width: 100%; max-width: 560px; border-radius: 8px; margin-top: 16px; background: #000; }
+  .consent { display: flex; gap: 10px; align-items: flex-start; background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 14px; }
+  .consent input { width: 18px; height: 18px; margin-top: 2px; }
+  code { background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 2px 6px; color: #fbbf24; }
+  .small { color: #94a3b8; font-size: 14px; }
+  footer { margin-top: 32px; padding: 16px 0; border-top: 1px solid #334155; color: #94a3b8; font-size: 14px; }
+  footer nav { display: flex; justify-content: center; flex-wrap: wrap; gap: 16px; }
+</style>
+</head>
+<body>
+<h1>📤 ScreenShare</h1>
+
+<div class="card" id="consentCard">
+  <p><strong>Someone invited you to view <em>and control</em> this computer.</strong></p>
+  <label class="consent">
+    <input type="checkbox" id="agree">
+    <span>I understand and agree that the person who sent this link may see my screen
+          <strong>and</strong> control this computer (move the mouse, click, scroll and type).</span>
+  </label>
+  <p class="small">You stay in control: you can stop sharing at any time from the browser's
+     <em>Stop sharing</em> pill, and push the mouse to a corner to abort remote control.</p>
+  <button id="ok" disabled>✓ I consent — start</button>
+</div>
+
+<div class="card" id="agentCard" hidden>
+  <h2>🔧 Control agent (optional but required for control)</h2>
+  <p class="small">For the viewer to <em>control</em> your computer, download and run this once on this machine:</p>
+  <p><a href="/agent.py" download id="agentDownload">⬇ Download agent.py</a></p>
+  <p class="small">Then in a terminal on this computer:
+     <code>pip install pyautogui websockets</code><br>
+     <code>python agent.py <span id="roomCode"></span></code></p>
+  <p class="small">It stays idle until you tick the box above and it receives consent. You can still
+     share your screen for viewing without it.</p>
+</div>
+
+<div class="card" id="liveCard" hidden>
+  <p id="live">● LIVE — you are sharing.</p>
+  <video id="preview" autoplay muted playsinline></video>
+</div>
+
+<footer>
+  <nav aria-label="Contact and profiles">
+    <a href="https://github.com/Ultra-0x" target="_blank" rel="noopener noreferrer">GitHub</a>
+    <a href="mailto:Odunukanabayomi1111@gmail.com">Email</a>
+    <a href="https://linkedin.com/in/odunukan-abayomi" target="_blank" rel="noopener noreferrer">LinkedIn</a>
+  </nav>
+</footer>
+
+<script>
+const room = location.pathname.split("/").filter(Boolean)[1];
+const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+const agreeEl = document.getElementById("agree");
+const okBtn = document.getElementById("ok");
+
+let ws, pc, stream, consented = false;
+
+agreeEl.onchange = () => { okBtn.disabled = !agreeEl.checked; };
+
+function connectWs() {
+  ws = new WebSocket(`${wsProto}//${location.host}/ws/${room}?role=share`);
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "answer") {
+      await pc.setRemoteDescription(msg.sdp);
+    } else if (msg.type === "candidate" && msg.candidate) {
+      await pc.addIceCandidate(msg.candidate);
+    }
+  };
+  ws.onopen = () => {
+    // Record consent with the server only after the box was ticked.
+    ws.send(JSON.stringify({ type: "consent" }));
+    startCapture();
+  };
+}
+
+async function startCapture() {
+  try {
+    // Browser shows the pick-a-screen prompt; it cannot be skipped or faked.
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  } catch (err) {
+    document.getElementById("status").textContent = "Sharing cancelled or not allowed: " + err.message;
+    return;
+  }
+  document.getElementById("preview").srcObject = stream;
+  document.getElementById("liveCard").hidden = false;
+  document.getElementById("agentCard").hidden = false;
+  document.getElementById("roomCode").textContent = room;
+
+  pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+  pc.onicecandidate = (e) => {
+    if (e.candidate) ws.send(JSON.stringify({ type: "candidate", candidate: e.candidate }));
+  };
+  pc.onnegotiationneeded = async () => {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type: "offer", sdp: pc.localDescription }));
+  };
+  stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+  stream.getVideoTracks()[0].onended = () => {
+    document.getElementById("liveCard").hidden = true;
+    if (pc) pc.close();
+  };
+}
+
+okBtn.onclick = () => {
+  document.getElementById("consentCard").hidden = true;
+  connectWs();
+};
+</script>
+</body>
+</html>
